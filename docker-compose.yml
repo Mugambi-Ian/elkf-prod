@@ -1,166 +1,152 @@
+version: "3.9"
+
 services:
-    init-certs:
-      image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
-      command: >
-        bash -c "
-          if [ ! -f /usr/share/elasticsearch/config/certs/elastic-certificates.p12 ]; then
-            echo 'ERROR: Certificate file not found! Run: docker compose --profile cert_gen run --rm cert_gen';
-            exit 1;
-          fi;
-          echo 'Certificate file found, verifying permissions...';
-          chown -R 1000:1000 /usr/share/elasticsearch/config/certs;
-          chmod 600 /usr/share/elasticsearch/config/certs/elastic-certificates.p12;
-          echo 'Permissions set correctly';
-          ls -lh /usr/share/elasticsearch/config/certs/elastic-certificates.p12;
-        "
-      user: root
-      volumes:
-        - certs:/usr/share/elasticsearch/config/certs
-      healthcheck:
-        test: ["CMD-SHELL", "test -f /usr/share/elasticsearch/config/certs/elastic-certificates.p12 && test -r /usr/share/elasticsearch/config/certs/elastic-certificates.p12"]
-        interval: 1s
-        retries: 5
+  cert_gen:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    container_name: cert_gen
+    user: root
+    volumes:
+      - certs:/usr/share/elasticsearch/config/certs
+    command: >
+      bash -c '
+        set -e;
+        mkdir -p config/certs;
+        elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip;
+        unzip -o config/certs/ca.zip -d config/certs;
+        elasticsearch-certutil cert --silent --pem \
+          --ca-cert config/certs/ca/ca.crt \
+          --ca-key  config/certs/ca/ca.key \
+          --dns elasticsearch --dns localhost \
+          --ip 127.0.0.1 \
+          -out config/certs/es.zip;
+        unzip -o config/certs/es.zip -d config/certs;
+        chown -R 1000:1000 config/certs;
+        find config/certs -type d -exec chmod 750 {} \;
+        find config/certs -type f -name "*.key" -exec chmod 600 {} \;
+        find config/certs -type f -name "*.crt" -exec chmod 644 {} \;
+        chown -R 1000:1000 config/certs;
+      '
 
-    elasticsearch:
-      image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
-      container_name: elasticsearch
-      hostname: elasticsearch
-      volumes:
-        - es-data:/usr/share/elasticsearch/data
-        - ./logs/elasticsearch:/usr/share/elasticsearch/logs
-        - certs:/usr/share/elasticsearch/config/certs
-      environment:
-        - node.name=elasticsearch
-        - xpack.security.enabled=true
-        - xpack.security.transport.ssl.enabled=true
-        - xpack.security.transport.ssl.keystore.path=/usr/share/elasticsearch/config/certs/elastic-certificates.p12
-        - xpack.security.transport.ssl.truststore.path=/usr/share/elasticsearch/config/certs/elastic-certificates.p12
-        - xpack.security.transport.ssl.keystore.password=${CERTS_PASSWORD}
-        - xpack.security.transport.ssl.truststore.password=${CERTS_PASSWORD}
-        - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
-        - discovery.type=single-node
-      deploy:
-        resources:
-          limits:
-            cpus: '4.0'
-            memory: 4g
-      healthcheck:
-        test: [ "CMD-SHELL", "curl -u elastic:${ELASTIC_PASSWORD} -sS http://localhost:9200/_cluster/health || exit 1" ]
-        interval: 30s
-        timeout: 10s
-        retries: 5
-        start_period: 60s  # Give ES more time to start initially
-      depends_on:
-        init-certs:
-          condition: service_completed_successfully
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    container_name: elasticsearch
+    depends_on:
+      cert_gen:
+        condition: service_completed_successfully
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+      - certs:/usr/share/elasticsearch/config/certs
+    environment:
+      node.name: elasticsearch
+      discovery.type: single-node
+      xpack.security.enabled: true
+      xpack.security.transport.ssl.enabled: true
+      xpack.security.transport.ssl.key: certs/instance/instance.key
+      xpack.security.transport.ssl.certificate: certs/instance/instance.crt
+      xpack.security.transport.ssl.certificate_authorities: certs/ca/ca.crt
 
-    logstash:
-      image: docker.elastic.co/logstash/logstash:8.12.0
-      environment:
-        - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
-      volumes:
-        - ./logstash/pipeline:/usr/share/logstash/pipeline
-        - ./logs/logstash:/usr/share/logstash/logs # Mount Logstash logs for inspection
-      deploy:
-        resources:
-          limits:
-            cpus: '0.5'
-            memory: 1g
+      xpack.security.http.ssl.enabled: true
+      xpack.security.http.ssl.key: certs/instance/instance.key
+      xpack.security.http.ssl.certificate: certs/instance/instance.crt
+      xpack.security.http.ssl.certificate_authorities: certs/ca/ca.crt
 
-    filebeat:
-      image: docker.elastic.co/beats/filebeat:8.12.0
-      # user: root # Removed for least privilege
-      volumes:
-        - ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml
-        - app-logs:/usr/local/var/log:ro
-      depends_on:
-        - logstash
-      deploy:
-        resources:
-          limits:
-            cpus: '0.2'
-            memory: 256m
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -k -u elastic:${ELASTIC_PASSWORD} https://localhost:9200 >/dev/null"]
+      interval: 10s
+      retries: 30
 
-    kibana:
-      image: docker.elastic.co/kibana/kibana:8.12.0
-      environment:
-        - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-        - ELASTICSEARCH_USERNAME=kibana_system
-        - ELASTICSEARCH_PASSWORD=${KIBANA_SYSTEM_PASSWORD}
-        - xpack.security.enabled=true
-      # ports:
-      #   - "5601:5601" # Port exposure handled by Nginx
-      depends_on:
-        elasticsearch:
-          condition: service_healthy
-      healthcheck:
-        test: ["CMD-SHELL", "curl -sS http://localhost:5601/api/status | grep -q '\"state\":\"green\"'"]
-        interval: 10s
-        timeout: 10s
-        retries: 12
-      deploy:
-        resources:
-          limits:
-            cpus: '0.5'
-            memory: 1g
+  es_bootstrap:
+    image: curlimages/curl:8.5.0
+    container_name: es_bootstrap
+    user: root
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    volumes:
+      - secrets:/secrets
+      - certs:/certs:ro
+    environment:
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
+      KIBANA_SYSTEM_PASSWORD: ${KIBANA_SYSTEM_PASSWORD}
+    command: >
+      sh -c '
+        set -e;
 
-    nginx:
-      image: nginx:stable-alpine
-      ports:
-        - "80:80"
-        - "443:443"
-      volumes:
-        - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-        - certbot-webroot:/var/www/certbot:rw # Volume for certbot challenges
-        - certbot-certs:/etc/letsencrypt:rw # Volume for certbot certificates
-      depends_on:
-        kibana:
-          condition: service_healthy
-      environment:
-        - KIBANA_DOMAIN=${KIBANA_DOMAIN}
-      deploy:
-        resources:
-          limits:
-            cpus: '0.2'
-            memory: 128m
+        echo "Waiting for Elasticsearch...";
+        until curl -sk -u elastic:${ELASTIC_PASSWORD} https://elasticsearch:9200 >/dev/null; do
+          sleep 2;
+        done;
 
-    cert_gen:
-      image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
-      command: >
-        bash -c '
-          set -e;
-          echo "Generating certificates...";
-          mkdir -p /usr/share/elasticsearch/config/certs;
-          CERT_PATH=/usr/share/elasticsearch/config/certs/elastic-certificates.p12;
-          
-          # Generate self-signed certificate with explicit output path
-          elasticsearch-certutil cert --self-signed --name elasticsearch --dns elasticsearch --dns localhost --ip 127.0.0.1 --ip ::1 -out "$$CERT_PATH" -pass "${CERTS_PASSWORD}";
-          
-          # Extract certificate to temp file
-          openssl pkcs12 -in "$$CERT_PATH" -nokeys -out /tmp/cert.crt -passin pass:"${CERTS_PASSWORD}" -passout pass:;
-          
-          # Import the certificate as a trusted entry into the same keystore
-          # keytool is in the JDK directory
-          /usr/share/elasticsearch/jdk/bin/keytool -importcert -noprompt -alias elasticsearch-ca -file /tmp/cert.crt -keystore "$$CERT_PATH" -storetype PKCS12 -storepass "${CERTS_PASSWORD}" -trustcacerts;
-          
-          rm -f /tmp/cert.crt;
-          chown -R 1000:1000 /usr/share/elasticsearch/config/certs;
-          chmod 600 "$$CERT_PATH";
-          echo "Certificates generated successfully at $$CERT_PATH";
-        '
-      volumes:
-        - certs:/usr/share/elasticsearch/config/certs
-      environment:
-        - ES_JAVA_OPTS=-Xms512m -Xmx512m
-        - CERTS_PASSWORD=${CERTS_PASSWORD}
-      container_name: cert_gen_container
-      user: root
-      profiles: ["cert_gen"]
+        echo "Setting kibana_system password...";
+        curl -sk -u elastic:${ELASTIC_PASSWORD} \
+          -X POST https://elasticsearch:9200/_security/user/kibana_system/_password \
+          -H "Content-Type: application/json" \
+          -d "{\"password\":\"${KIBANA_SYSTEM_PASSWORD}\"}";
+
+        echo "Creating Logstash API key...";
+        API_KEY=$(curl -sk -u elastic:${ELASTIC_PASSWORD} \
+          -X POST "https://elasticsearch:9200/_security/api_key?filter_path=encoded" \
+          -H "Content-Type: application/json" \
+          -d "{
+            \"name\": \"logstash-ingest\",
+            \"role_descriptors\": {
+              \"logstash_writer\": {
+                \"cluster\": [\"monitor\"],
+                \"index\": [{
+                  \"names\": [\"logs-*\"],
+                  \"privileges\": [\"create_index\",\"create\",\"write\"]
+                }]
+              }
+            }
+          }" | sed -n "s/.*\"encoded\":\"\\([^\"]*\\)\".*/\\1/p");
+
+        echo \"$API_KEY\" > /secrets/logstash_api_key;
+        chmod 600 /secrets/logstash_api_key;
+
+        echo \"Bootstrap completed successfully\";
+      '
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.12.0
+    depends_on:
+      es_bootstrap:
+        condition: service_completed_successfully
+    volumes:
+      - certs:/usr/share/kibana/config/certs:ro
+    environment:
+      ELASTICSEARCH_HOSTS: https://elasticsearch:9200
+      ELASTICSEARCH_USERNAME: kibana_system
+      ELASTICSEARCH_PASSWORD: ${KIBANA_SYSTEM_PASSWORD}
+      ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES: /usr/share/kibana/config/certs/ca/ca.crt
+    ports:
+        - "5601:5601"
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.12.0
+    depends_on:
+      es_bootstrap:
+        condition: service_completed_successfully
+    volumes:
+      - certs:/certs:ro
+      - secrets:/secrets:ro
+      - ./logstash/pipeline:/usr/share/logstash/pipeline
+    environment:
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
+      LOGSTASH_API_KEY_FILE: /secrets/logstash_api_key
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.12.0
+    user: root
+    depends_on:
+      - logstash
+    volumes:
+      - ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - app-logs:/usr/local/var/log:ro
+
 volumes:
   es-data:
+  certs:
+  secrets:
   app-logs:
     external: true
-  certbot-webroot: # Volume for certbot challenges
-  certbot-certs: # Volume for certbot certificates
-  certs: # New volume for certificates
-

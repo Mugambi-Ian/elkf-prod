@@ -35,19 +35,17 @@ Create a `.env` file from the provided example file.
 cp .env.example .env
 ```
 
-Now, edit the `.env` file and populate it with secure credentials. Use the following command to generate each required password:
+Now, edit the `.env` file and populate it with a secure password and your domain. Use the following command to generate the required password:
 
 ```bash
 openssl rand -hex 16
 ```
 
-Your completed `.env` file should look like this, but with your own generated values:
+Your completed `.env` file should look like this, but with your own generated values. This single password will be used for the `elastic` superuser and for service-to-service authentication (like Kibana to Elasticsearch).
 
 ```ini
 # .env
 ELASTIC_PASSWORD=f2d1a3e...
-KIBANA_SYSTEM_PASSWORD=e8b4c2a...
-CERTS_PASSWORD=a9c3d1b...
 KIBANA_DOMAIN=your-kibana.your-domain.com
 ```
 
@@ -61,13 +59,26 @@ docker volume create app-logs
 
 ### Step 4: Generate Transport Layer Certificates
 
-The communication between Elastic components (e.g., Elasticsearch and Logstash) is secured by TLS. We need to generate a self-signed certificate for the transport layer. This command runs a temporary container to generate the certificate file (`elastic-certificates.p12`) into a new Docker volume named `certs`.
+The communication between Elastic components is secured by TLS. This command runs a temporary container to generate the certificate file (`elastic-certificates.p12`) into a new Docker volume named `certs`. **This only needs to be run once.**
 
 ```bash
 docker compose --profile cert_gen run --rm cert_gen
 ```
 
-### Step 5: Configure Nginx for Production HTTPS
+### Step 5: Set Up Built-in User Passwords
+
+The first time you start the stack, you need to set the passwords for the built-in users. This command runs a temporary container that waits for Elasticsearch to be healthy and then sets the passwords automatically based on the `ELASTIC_PASSWORD` in your `.env` file. **This only needs to be run once.**
+
+```bash
+docker compose --profile setup up --build -d
+```
+Wait for this command to complete, then shut it down before proceeding.
+```bash
+docker compose down
+```
+
+
+### Step 6: Configure Nginx for Production HTTPS
 
 The Nginx service is configured to act as a reverse proxy for Kibana and to handle production-grade TLS termination.
 
@@ -76,18 +87,18 @@ The Nginx service is configured to act as a reverse proxy for Kibana and to hand
     You can obtain a certificate by running a Certbot container like this (replace `your-email@example.com` and `your-kibana.your-domain.com`):
 
     ```bash
-docker run -it --rm \
-  -v "$(pwd)/certbot-certs:/etc/letsencrypt" \
-  -v "$(pwd)/certbot-webroot:/var/www/certbot" \
-  certbot/certbot certonly --webroot \
-  --webroot-path /var/www/certbot \
-  -m your-email@example.com --agree-tos -n \
-  -d your-kibana.your-domain.com
+    docker run -it --rm \
+      -v "$(pwd)/certbot-certs:/etc/letsencrypt" \
+      -v "$(pwd)/certbot-webroot:/var/www/certbot" \
+      certbot/certbot certonly --webroot \
+      --webroot-path /var/www/certbot \
+      -m your-email@example.com --agree-tos -n \
+      -d your-kibana.your-domain.com
     ```
 
 2.  **Update Nginx Configuration**: Ensure your `nginx/nginx.conf` correctly references the generated SSL certificates and your `KIBANA_DOMAIN`. The provided configuration should work with the Certbot setup above.
 
-### Step 6: Launch the Stack
+### Step 7: Launch the Stack
 
 With all configurations in place, launch the entire stack.
 

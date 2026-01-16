@@ -1,0 +1,16 @@
+filebeat.inputs:
+  - type: filestream
+    id: app-logs
+    paths:
+      - /usr/local/var/log/*.log
+    parsers:
+      - ndjson:
+          target: ""
+          overwrite_keys: true
+
+processors:
+  - add_host_metadata: {}
+  - add_docker_metadata: {}
+
+output.logstash:
+  hosts: ["logstash:5044"]

@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   cert_gen:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
@@ -24,47 +22,88 @@ services:
         find config/certs -type d -exec chmod 750 {} \;
         find config/certs -type f -name "*.key" -exec chmod 600 {} \;
         find config/certs -type f -name "*.crt" -exec chmod 644 {} \;
-        chown -R 1000:1000 config/certs;
       '
+    security_opt:
+      - no-new-privileges:true
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
     container_name: elasticsearch
+    restart: unless-stopped
     depends_on:
       cert_gen:
         condition: service_completed_successfully
     volumes:
       - es-data:/usr/share/elasticsearch/data
       - certs:/usr/share/elasticsearch/config/certs
+      - snapshots:/usr/share/elasticsearch/snapshots
     environment:
       node.name: elasticsearch
       discovery.type: single-node
-      xpack.security.enabled: true
-      xpack.security.transport.ssl.enabled: true
+      bootstrap.memory_lock: "false"
+
+      # Security
+      xpack.security.enabled: "true"
+      xpack.security.authc.api_key.enabled: "true"
+      xpack.security.audit.enabled: "true"
+
+      # SSL Transport
+      xpack.security.transport.ssl.enabled: "true"
       xpack.security.transport.ssl.key: certs/instance/instance.key
       xpack.security.transport.ssl.certificate: certs/instance/instance.crt
       xpack.security.transport.ssl.certificate_authorities: certs/ca/ca.crt
+      xpack.security.transport.ssl.verification_mode: certificate
 
-      xpack.security.http.ssl.enabled: true
+      # SSL HTTP
+      xpack.security.http.ssl.enabled: "true"
       xpack.security.http.ssl.key: certs/instance/instance.key
       xpack.security.http.ssl.certificate: certs/instance/instance.crt
       xpack.security.http.ssl.certificate_authorities: certs/ca/ca.crt
 
+      # Credentials
       ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
-        - ES_JAVA_OPTS=-Xms512m -Xmx512m
+
+      # Snapshot repository path
+      path.repo: /usr/share/elasticsearch/snapshots
+
+      # Memory settings - optimized for 2GB droplet
+      ES_JAVA_OPTS: "-Xms256m -Xmx256m"
+
+      # Performance tuning
+      indices.memory.index_buffer_size: "10%"
+      thread_pool.write.queue_size: 500
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+        reservations:
+          memory: 512m
     ulimits:
-        memlock:
-          soft: -1
-          hard: -1
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
     healthcheck:
-      test: ["CMD-SHELL", "curl -k -u elastic:${ELASTIC_PASSWORD} https://localhost:9200 >/dev/null"]
-      interval: 10s
+      test: ["CMD-SHELL", "curl -k -u elastic:${ELASTIC_PASSWORD} https://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
       retries: 30
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true
 
   es_bootstrap:
-    user: root
     image: curlimages/curl:8.5.0
     container_name: es_bootstrap
+    user: root
+    restart: "no"
     depends_on:
       elasticsearch:
         condition: service_healthy
@@ -79,82 +118,243 @@ services:
         set -e;
 
         echo "Waiting for Elasticsearch...";
-        until curl -sk -u elastic:${ELASTIC_PASSWORD} https://elasticsearch:9200 >/dev/null; do
+        until curl -sk -u elastic:${ELASTIC_PASSWORD} https://elasticsearch:9200/_cluster/health >/dev/null 2>&1; do
+          echo "Elasticsearch not ready, waiting...";
           sleep 2;
         done;
 
         echo "Setting kibana_system password...";
-        curl -sk -u elastic:${ELASTIC_PASSWORD} \
+        RESPONSE=$$(curl -sk -u elastic:${ELASTIC_PASSWORD} \
           -X POST https://elasticsearch:9200/_security/user/kibana_system/_password \
           -H "Content-Type: application/json" \
-          -d "{\"password\":\"${KIBANA_SYSTEM_PASSWORD}\"}" \
-          || exit 1;
+          -d "{\"password\":\"${KIBANA_SYSTEM_PASSWORD}\"}");
+      
+        echo "$$RESPONSE";
+        if echo "$$RESPONSE" | grep -q "error"; then
+          echo "Failed to set kibana_system password";
+          exit 1;
+        fi;
 
         echo "Creating Logstash API key...";
-        API_KEY=$(curl -sk -u elastic:${ELASTIC_PASSWORD} \
+        API_KEY=$$(curl -sk -u elastic:${ELASTIC_PASSWORD} \
           -X POST https://elasticsearch:9200/_security/api_key \
           -H "Content-Type: application/json" \
           -d "{
             \"name\": \"logstash-ingest\",
             \"role_descriptors\": {
               \"logstash_writer\": {
-                \"cluster\": [\"monitor\"],
+                \"cluster\": [\"monitor\", \"manage_index_templates\", \"manage_ilm\"],
                 \"index\": [{
-                  \"names\": [\"logs-*\"],
-                  \"privileges\": [\"create_index\",\"create\",\"write\"]
+                  \"names\": [\"logs-*\", \"filebeat-*\"],
+                  \"privileges\": [\"create_index\", \"create\", \"write\", \"manage\"]
                 }]
               }
             }
           }" | sed -n "s/.*\"encoded\":\"\\([^\"]*\\)\".*/\\1/p");
 
-        [ -n \"$API_KEY\" ] || exit 1;
+        if [ -z "$$API_KEY" ]; then
+          echo "Failed to create API key";
+          exit 1;
+        fi;
 
-        echo \"$API_KEY\" > /secrets/logstash_api_key;
+        echo "$$API_KEY" > /secrets/logstash_api_key;
         chmod 600 /secrets/logstash_api_key;
+
+        echo "Setting default index template for compression and performance...";
+        curl -sk -u elastic:${ELASTIC_PASSWORD} \
+          -X PUT "https://elasticsearch:9200/_index_template/logs-default-template" \
+          -H "Content-Type: application/json" \
+          -d "{
+            \"index_patterns\": [\"logs-*\", \"filebeat-*\"],
+            \"priority\": 200,
+            \"template\": {
+              \"settings\": {
+                \"index.codec\": \"best_compression\",
+                \"index.merge.policy.max_merged_segment\": \"2gb\",
+                \"index.refresh_interval\": \"30s\",
+                \"index.number_of_shards\": 1,
+                \"index.number_of_replicas\": 0
+              }
+            }
+          }";
+
+        echo "Setting up index lifecycle policy...";
+        curl -sk -u elastic:${ELASTIC_PASSWORD} \
+          -X PUT "https://elasticsearch:9200/_ilm/policy/logs-policy" \
+          -H "Content-Type: application/json" \
+          -d "{
+            \"policy\": {
+              \"phases\": {
+                \"hot\": {
+                  \"actions\": {
+                    \"rollover\": {
+                      \"max_size\": \"2gb\",
+                      \"max_age\": \"3d\",
+                      \"max_docs\": 200000
+                    },
+                    \"set_priority\": {
+                      \"priority\": 100
+                    }
+                  }
+                },
+                \"warm\": {
+                  \"min_age\": \"7d\",
+                  \"actions\": {
+                    \"set_priority\": {
+                      \"priority\": 50
+                    },
+                    \"forcemerge\": {
+                      \"max_num_segments\": 1
+                    },
+                    \"shrink\": {
+                      \"number_of_shards\": 1
+                    },
+                    \"allocate\": {
+                      \"number_of_replicas\": 0
+                    }
+                  }
+                },
+                \"delete\": {
+                  \"min_age\": \"90d\",
+                  \"actions\": {
+                    \"delete\": {}
+                  }
+                }
+              }
+            }
+          }";
 
         echo "Bootstrap completed successfully";
       '
+    security_opt:
+      - no-new-privileges:true
 
   kibana:
     image: docker.elastic.co/kibana/kibana:8.12.0
+    container_name: kibana
+    restart: unless-stopped
     depends_on:
       es_bootstrap:
         condition: service_completed_successfully
     volumes:
       - certs:/usr/share/kibana/config/certs:ro
     environment:
+      SERVER_NAME: kibana
+      SERVER_HOST: "0.0.0.0"
       ELASTICSEARCH_HOSTS: https://elasticsearch:9200
       ELASTICSEARCH_USERNAME: kibana_system
       ELASTICSEARCH_PASSWORD: ${KIBANA_SYSTEM_PASSWORD}
       ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES: /usr/share/kibana/config/certs/ca/ca.crt
+      ELASTICSEARCH_SSL_VERIFICATIONMODE: certificate
+
+      # Memory optimization
+      NODE_OPTIONS: "--max-old-space-size=400"
+
+      # Security
+      XPACK_SECURITY_ENCRYPTIONKEY: ${KIBANA_ENCRYPTION_KEY:-changeme_32_character_string_here}
+      XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: ${KIBANA_ENCRYPTION_KEY:-changeme_32_character_string_here}
     ports:
-        - "5601:5601"
+      - "127.0.0.1:5601:5601"
+    deploy:
+      resources:
+        limits:
+          memory: 640m
+        reservations:
+          memory: 400m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5601/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true
 
   logstash:
     image: docker.elastic.co/logstash/logstash:8.12.0
+    container_name: logstash
+    restart: unless-stopped
     depends_on:
       es_bootstrap:
         condition: service_completed_successfully
     volumes:
       - certs:/certs:ro
       - secrets:/secrets:ro
-      - ./logstash/pipeline:/usr/share/logstash/pipeline
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
     environment:
+      # Memory optimization
+      LS_JAVA_OPTS: "-Xms128m -Xmx128m"
+
+      # Performance tuning
+      PIPELINE_WORKERS: 1
+      PIPELINE_BATCH_SIZE: 125
+      PIPELINE_BATCH_DELAY: 50
+
+      # Credentials
       ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
       LOGSTASH_API_KEY_FILE: /secrets/logstash_api_key
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+        reservations:
+          memory: 256m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true
 
   filebeat:
     image: docker.elastic.co/beats/filebeat:8.12.0
+    container_name: filebeat
+    restart: unless-stopped
     user: root
     depends_on:
       - logstash
     volumes:
       - ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
       - app-logs:/usr/local/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      LOGSTASH_HOSTS: "logstash:5044"
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+        reservations:
+          memory: 64m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   es-data:
+    driver: local
+  snapshots:
+    driver: local
   certs:
+    driver: local
   secrets:
+    driver: local
   app-logs:
     external: true
+
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16

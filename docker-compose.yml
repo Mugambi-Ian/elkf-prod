@@ -64,7 +64,6 @@ services:
   es_bootstrap:
     image: curlimages/curl:8.5.0
     container_name: es_bootstrap
-    user: root
     depends_on:
       elasticsearch:
         condition: service_healthy
@@ -87,11 +86,12 @@ services:
         curl -sk -u elastic:${ELASTIC_PASSWORD} \
           -X POST https://elasticsearch:9200/_security/user/kibana_system/_password \
           -H "Content-Type: application/json" \
-          -d "{\"password\":\"${KIBANA_SYSTEM_PASSWORD}\"}";
+          -d "{\"password\":\"${KIBANA_SYSTEM_PASSWORD}\"}" \
+          || exit 1;
 
         echo "Creating Logstash API key...";
         API_KEY=$(curl -sk -u elastic:${ELASTIC_PASSWORD} \
-          -X POST "https://elasticsearch:9200/_security/api_key?filter_path=encoded" \
+          -X POST https://elasticsearch:9200/_security/api_key \
           -H "Content-Type: application/json" \
           -d "{
             \"name\": \"logstash-ingest\",
@@ -106,10 +106,12 @@ services:
             }
           }" | sed -n "s/.*\"encoded\":\"\\([^\"]*\\)\".*/\\1/p");
 
+        [ -n \"$API_KEY\" ] || exit 1;
+
         echo \"$API_KEY\" > /secrets/logstash_api_key;
         chmod 600 /secrets/logstash_api_key;
 
-        echo \"Bootstrap completed successfully\";
+        echo "Bootstrap completed successfully";
       '
 
   kibana:

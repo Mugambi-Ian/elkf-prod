@@ -254,7 +254,7 @@ services:
       XPACK_SECURITY_ENCRYPTIONKEY: ${KIBANA_ENCRYPTION_KEY:-changeme_32_character_string_here}
       XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: ${KIBANA_ENCRYPTION_KEY:-changeme_32_character_string_here}
     ports:
-      - "127.0.0.1:5601:5601"
+      - "0.0.0.0:5601:5601"
     deploy:
       resources:
         limits:

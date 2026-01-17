@@ -62,6 +62,7 @@ services:
       retries: 30
 
   es_bootstrap:
+    user: root
     image: curlimages/curl:8.5.0
     container_name: es_bootstrap
     depends_on:

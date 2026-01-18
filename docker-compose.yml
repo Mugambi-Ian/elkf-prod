@@ -171,7 +171,7 @@ services:
               \"settings\": {
                 \"index.codec\": \"best_compression\",
                 \"index.merge.policy.max_merged_segment\": \"2gb\",
-                \"index.refresh_interval\": \"30s\",
+                \"index.refresh_interval\": \"2s\",
                 \"index.number_of_shards\": 1,
                 \"index.number_of_replicas\": 0
               }
@@ -290,10 +290,10 @@ services:
       # Memory optimization
       LS_JAVA_OPTS: "-Xms128m -Xmx128m"
 
-      # Performance tuning
+      # Performance tuning - optimized for low latency
       PIPELINE_WORKERS: 1
-      PIPELINE_BATCH_SIZE: 125
-      PIPELINE_BATCH_DELAY: 50
+      PIPELINE_BATCH_SIZE: 50
+      PIPELINE_BATCH_DELAY: 10
 
       # Credentials
       ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}

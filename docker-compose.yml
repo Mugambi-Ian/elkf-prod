@@ -66,8 +66,8 @@ services:
       # Snapshot repository path
       path.repo: /usr/share/elasticsearch/snapshots
 
-      # Memory settings - optimized for 2GB droplet
-      ES_JAVA_OPTS: "-Xms256m -Xmx256m"
+      # Memory settings - optimized for 4GB
+      ES_JAVA_OPTS: "-Xms4g -Xmx4g"
 
       # Performance tuning
       indices.memory.index_buffer_size: "10%"
@@ -75,9 +75,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 768m
+          memory: 5g
         reservations:
-          memory: 512m
+          memory: 4g
     ulimits:
       memlock:
         soft: -1
@@ -258,9 +258,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 640m
+          memory: 1.5g
         reservations:
-          memory: 400m
+          memory: 1g
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:5601/api/status || exit 1"]
       interval: 30s
@@ -288,7 +288,7 @@ services:
       - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
     environment:
       # Memory optimization
-      LS_JAVA_OPTS: "-Xms128m -Xmx128m"
+      LS_JAVA_OPTS: "-Xms512m -Xmx512m"
 
       # Performance tuning - optimized for low latency
       PIPELINE_WORKERS: 1
@@ -301,9 +301,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 384m
+          memory: 1g
         reservations:
-          memory: 256m
+          memory: 512m
     logging:
       driver: "json-file"
       options:

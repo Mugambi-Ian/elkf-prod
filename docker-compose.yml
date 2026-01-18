@@ -1,28 +1,33 @@
 services:
+  es_bootstrap:
+    image: curlimages/curl:8.5.0
+    container_name: es_bootstrap
+    user: root
+    restart: "no"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    volumes:
+      - secrets:/secrets
+      - certs:/certs:ro
+      - ./scripts/es-bootstrap.sh:/scripts/es-bootstrap.sh:ro
+    environment:
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
+      KIBANA_SYSTEM_PASSWORD: ${KIBANA_SYSTEM_PASSWORD}
+    command: [ "sh", "/scripts/es-bootstrap.sh" ]
+    security_opt:
+      - no-new-privileges:true
+
+
   cert_gen:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
     container_name: cert_gen
     user: root
+    restart: "no"
     volumes:
       - certs:/usr/share/elasticsearch/config/certs
-    command: >
-      bash -c '
-        set -e;
-        mkdir -p config/certs;
-        elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip;
-        unzip -o config/certs/ca.zip -d config/certs;
-        elasticsearch-certutil cert --silent --pem \
-          --ca-cert config/certs/ca/ca.crt \
-          --ca-key  config/certs/ca/ca.key \
-          --dns elasticsearch --dns localhost \
-          --ip 127.0.0.1 \
-          -out config/certs/es.zip;
-        unzip -o config/certs/es.zip -d config/certs;
-        chown -R 1000:1000 config/certs;
-        find config/certs -type d -exec chmod 750 {} \;
-        find config/certs -type f -name "*.key" -exec chmod 600 {} \;
-        find config/certs -type f -name "*.crt" -exec chmod 644 {} \;
-      '
+      - ./scripts/cert-gen.sh:/scripts/cert-gen.sh:ro
+    command: [ "bash", "/scripts/cert-gen.sh" ]
     security_opt:
       - no-new-privileges:true
 
@@ -66,8 +71,8 @@ services:
       # Snapshot repository path
       path.repo: /usr/share/elasticsearch/snapshots
 
-      # Memory settings - optimized for 2GB droplet
-      ES_JAVA_OPTS: "-Xms256m -Xmx256m"
+      # Memory settings - optimized for 3GB
+      ES_JAVA_OPTS: "-Xms3g -Xmx3g"
 
       # Performance tuning
       indices.memory.index_buffer_size: "10%"
@@ -75,9 +80,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 768m
+          memory: 4g
         reservations:
-          memory: 512m
+          memory: 3g
     ulimits:
       memlock:
         soft: -1
@@ -86,7 +91,7 @@ services:
         soft: 65536
         hard: 65536
     healthcheck:
-      test: ["CMD-SHELL", "curl -k -u elastic:${ELASTIC_PASSWORD} https://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s >/dev/null 2>&1 || exit 1"]
+      test: [ "CMD-SHELL", "curl -k -u elastic:${ELASTIC_PASSWORD} https://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s >/dev/null 2>&1 || exit 1" ]
       interval: 15s
       timeout: 10s
       retries: 30
@@ -96,136 +101,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    security_opt:
-      - no-new-privileges:true
-
-  es_bootstrap:
-    image: curlimages/curl:8.5.0
-    container_name: es_bootstrap
-    user: root
-    restart: "no"
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-    volumes:
-      - secrets:/secrets
-      - certs:/certs:ro
-    environment:
-      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
-      KIBANA_SYSTEM_PASSWORD: ${KIBANA_SYSTEM_PASSWORD}
-    command: >
-      sh -c '
-        set -e;
-
-        echo "Waiting for Elasticsearch...";
-        until curl -sk -u elastic:${ELASTIC_PASSWORD} https://elasticsearch:9200/_cluster/health >/dev/null 2>&1; do
-          echo "Elasticsearch not ready, waiting...";
-          sleep 2;
-        done;
-
-        echo "Setting kibana_system password...";
-        RESPONSE=$$(curl -sk -u elastic:${ELASTIC_PASSWORD} \
-          -X POST https://elasticsearch:9200/_security/user/kibana_system/_password \
-          -H "Content-Type: application/json" \
-          -d "{\"password\":\"${KIBANA_SYSTEM_PASSWORD}\"}");
-      
-        echo "$$RESPONSE";
-        if echo "$$RESPONSE" | grep -q "error"; then
-          echo "Failed to set kibana_system password";
-          exit 1;
-        fi;
-
-        echo "Creating Logstash API key...";
-        API_KEY=$$(curl -sk -u elastic:${ELASTIC_PASSWORD} \
-          -X POST https://elasticsearch:9200/_security/api_key \
-          -H "Content-Type: application/json" \
-          -d "{
-            \"name\": \"logstash-ingest\",
-            \"role_descriptors\": {
-              \"logstash_writer\": {
-                \"cluster\": [\"monitor\", \"manage_index_templates\", \"manage_ilm\"],
-                \"index\": [{
-                  \"names\": [\"logs-*\", \"filebeat-*\"],
-                  \"privileges\": [\"create_index\", \"create\", \"write\", \"manage\"]
-                }]
-              }
-            }
-          }" | sed -n "s/.*\"encoded\":\"\\([^\"]*\\)\".*/\\1/p");
-
-        if [ -z "$$API_KEY" ]; then
-          echo "Failed to create API key";
-          exit 1;
-        fi;
-
-        echo "$$API_KEY" > /secrets/logstash_api_key;
-        chmod 600 /secrets/logstash_api_key;
-
-        echo "Setting default index template for compression and performance...";
-        curl -sk -u elastic:${ELASTIC_PASSWORD} \
-          -X PUT "https://elasticsearch:9200/_index_template/logs-default-template" \
-          -H "Content-Type: application/json" \
-          -d "{
-            \"index_patterns\": [\"logs-*\", \"filebeat-*\"],
-            \"priority\": 200,
-            \"template\": {
-              \"settings\": {
-                \"index.codec\": \"best_compression\",
-                \"index.merge.policy.max_merged_segment\": \"2gb\",
-                \"index.refresh_interval\": \"2s\",
-                \"index.number_of_shards\": 1,
-                \"index.number_of_replicas\": 0
-              }
-            }
-          }";
-
-        echo "Setting up index lifecycle policy...";
-        curl -sk -u elastic:${ELASTIC_PASSWORD} \
-          -X PUT "https://elasticsearch:9200/_ilm/policy/logs-policy" \
-          -H "Content-Type: application/json" \
-          -d "{
-            \"policy\": {
-              \"phases\": {
-                \"hot\": {
-                  \"actions\": {
-                    \"rollover\": {
-                      \"max_size\": \"2gb\",
-                      \"max_age\": \"3d\",
-                      \"max_docs\": 200000
-                    },
-                    \"set_priority\": {
-                      \"priority\": 100
-                    }
-                  }
-                },
-                \"warm\": {
-                  \"min_age\": \"7d\",
-                  \"actions\": {
-                    \"set_priority\": {
-                      \"priority\": 50
-                    },
-                    \"forcemerge\": {
-                      \"max_num_segments\": 1
-                    },
-                    \"shrink\": {
-                      \"number_of_shards\": 1
-                    },
-                    \"allocate\": {
-                      \"number_of_replicas\": 0
-                    }
-                  }
-                },
-                \"delete\": {
-                  \"min_age\": \"90d\",
-                  \"actions\": {
-                    \"delete\": {}
-                  }
-                }
-              }
-            }
-          }";
-
-        echo "Bootstrap completed successfully";
-      '
     security_opt:
       - no-new-privileges:true
 
@@ -258,11 +133,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 640m
+          memory: 1.5g
         reservations:
-          memory: 400m
+          memory: 1g
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:5601/api/status || exit 1"]
+      test: [ "CMD-SHELL", "curl -f http://localhost:5601/api/status || exit 1" ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -288,7 +163,7 @@ services:
       - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
     environment:
       # Memory optimization
-      LS_JAVA_OPTS: "-Xms128m -Xmx128m"
+      LS_JAVA_OPTS: "-Xms512m -Xmx512m"
 
       # Performance tuning - optimized for low latency
       PIPELINE_WORKERS: 1
@@ -301,9 +176,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 384m
+          memory: 1g
         reservations:
-          memory: 256m
+          memory: 512m
     logging:
       driver: "json-file"
       options:

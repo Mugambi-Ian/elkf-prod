@@ -7,6 +7,9 @@ filebeat.inputs:
       - ndjson:
           target: ""
           overwrite_keys: true
+    # Optimize for low latency
+    scan_frequency: 1s
+    harvester_buffer_size: 16384
 
 processors:
   - add_host_metadata: {}
@@ -14,3 +17,6 @@ processors:
 
 output.logstash:
   hosts: ["logstash:5044"]
+  # Flush events more frequently for lower latency
+  flush_interval: 1s
+  bulk_max_size: 50

@@ -5,24 +5,8 @@ services:
     user: root
     volumes:
       - certs:/usr/share/elasticsearch/config/certs
-    command: >
-      bash -c '
-        set -e;
-        mkdir -p config/certs;
-        elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip;
-        unzip -o config/certs/ca.zip -d config/certs;
-        elasticsearch-certutil cert --silent --pem \
-          --ca-cert config/certs/ca/ca.crt \
-          --ca-key  config/certs/ca/ca.key \
-          --dns elasticsearch --dns localhost \
-          --ip 127.0.0.1 \
-          -out config/certs/es.zip;
-        unzip -o config/certs/es.zip -d config/certs;
-        chown -R 1000:1000 config/certs;
-        find config/certs -type d -exec chmod 750 {} \;
-        find config/certs -type f -name "*.key" -exec chmod 600 {} \;
-        find config/certs -type f -name "*.crt" -exec chmod 644 {} \;
-      '
+      - ./scripts/cert-gen.sh:/scripts/cert-gen.sh:ro
+    command: ["bash", "/scripts/cert-gen.sh"]
     security_opt:
       - no-new-privileges:true
 
@@ -110,122 +94,11 @@ services:
     volumes:
       - secrets:/secrets
       - certs:/certs:ro
+      - ./scripts/es-bootstrap.sh:/scripts/es-bootstrap.sh:ro
     environment:
       ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
       KIBANA_SYSTEM_PASSWORD: ${KIBANA_SYSTEM_PASSWORD}
-    command: >
-      sh -c '
-        set -e;
-
-        echo "Waiting for Elasticsearch...";
-        until curl -sk -u elastic:${ELASTIC_PASSWORD} https://elasticsearch:9200/_cluster/health >/dev/null 2>&1; do
-          echo "Elasticsearch not ready, waiting...";
-          sleep 2;
-        done;
-
-        echo "Setting kibana_system password...";
-        RESPONSE=$$(curl -sk -u elastic:${ELASTIC_PASSWORD} \
-          -X POST https://elasticsearch:9200/_security/user/kibana_system/_password \
-          -H "Content-Type: application/json" \
-          -d "{\"password\":\"${KIBANA_SYSTEM_PASSWORD}\"}");
-      
-        echo "$$RESPONSE";
-        if echo "$$RESPONSE" | grep -q "error"; then
-          echo "Failed to set kibana_system password";
-          exit 1;
-        fi;
-
-        echo "Creating Logstash API key...";
-        API_KEY=$$(curl -sk -u elastic:${ELASTIC_PASSWORD} \
-          -X POST https://elasticsearch:9200/_security/api_key \
-          -H "Content-Type: application/json" \
-          -d "{
-            \"name\": \"logstash-ingest\",
-            \"role_descriptors\": {
-              \"logstash_writer\": {
-                \"cluster\": [\"monitor\", \"manage_index_templates\", \"manage_ilm\"],
-                \"index\": [{
-                  \"names\": [\"logs-*\", \"filebeat-*\"],
-                  \"privileges\": [\"create_index\", \"create\", \"write\", \"manage\"]
-                }]
-              }
-            }
-          }" | sed -n "s/.*\"encoded\":\"\\([^\"]*\\)\".*/\\1/p");
-
-        if [ -z "$$API_KEY" ]; then
-          echo "Failed to create API key";
-          exit 1;
-        fi;
-
-        echo "$$API_KEY" > /secrets/logstash_api_key;
-        chmod 600 /secrets/logstash_api_key;
-
-        echo "Setting default index template for compression and performance...";
-        curl -sk -u elastic:${ELASTIC_PASSWORD} \
-          -X PUT "https://elasticsearch:9200/_index_template/logs-default-template" \
-          -H "Content-Type: application/json" \
-          -d "{
-            \"index_patterns\": [\"logs-*\", \"filebeat-*\"],
-            \"priority\": 200,
-            \"template\": {
-              \"settings\": {
-                \"index.codec\": \"best_compression\",
-                \"index.merge.policy.max_merged_segment\": \"2gb\",
-                \"index.refresh_interval\": \"2s\",
-                \"index.number_of_shards\": 1,
-                \"index.number_of_replicas\": 0
-              }
-            }
-          }";
-
-        echo "Setting up index lifecycle policy...";
-        curl -sk -u elastic:${ELASTIC_PASSWORD} \
-          -X PUT "https://elasticsearch:9200/_ilm/policy/logs-policy" \
-          -H "Content-Type: application/json" \
-          -d "{
-            \"policy\": {
-              \"phases\": {
-                \"hot\": {
-                  \"actions\": {
-                    \"rollover\": {
-                      \"max_size\": \"2gb\",
-                      \"max_age\": \"3d\",
-                      \"max_docs\": 200000
-                    },
-                    \"set_priority\": {
-                      \"priority\": 100
-                    }
-                  }
-                },
-                \"warm\": {
-                  \"min_age\": \"7d\",
-                  \"actions\": {
-                    \"set_priority\": {
-                      \"priority\": 50
-                    },
-                    \"forcemerge\": {
-                      \"max_num_segments\": 1
-                    },
-                    \"shrink\": {
-                      \"number_of_shards\": 1
-                    },
-                    \"allocate\": {
-                      \"number_of_replicas\": 0
-                    }
-                  }
-                },
-                \"delete\": {
-                  \"min_age\": \"90d\",
-                  \"actions\": {
-                    \"delete\": {}
-                  }
-                }
-              }
-            }
-          }";
-
-        echo "Bootstrap completed successfully";
-      '
+    command: ["sh", "/scripts/es-bootstrap.sh"]
     security_opt:
       - no-new-privileges:true
 

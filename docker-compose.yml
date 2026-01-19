@@ -124,8 +124,8 @@ services:
       NODE_OPTIONS: "--max-old-space-size=400"
 
       # Security
-      XPACK_SECURITY_ENCRYPTIONKEY: ${KIBANA_ENCRYPTION_KEY:-changeme_32_character_string_here}
-      XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: ${KIBANA_ENCRYPTION_KEY:-changeme_32_character_string_here}
+      XPACK_SECURITY_ENCRYPTIONKEY: ${KIBANA_ENCRYPTION_KEY}
+      XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: ${KIBANA_ENCRYPTION_KEY}
     ports:
       - "0.0.0.0:5601:5601"
     deploy:

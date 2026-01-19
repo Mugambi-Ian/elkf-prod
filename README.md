@@ -100,10 +100,6 @@ The CPU and memory limits in `docker-compose.yml` are set to reasonable defaults
 
 Monitor your resource usage and adjust them according to your host's capacity and the stack's workload.
 
-### Data Backup
-
-For production data, it is critical to set up regular backups. Use the [Elasticsearch Snapshot and Restore](https://www.elastic.co/guide/en/elasticsearch/reference/current/snapshot-restore.html) functionality to back up your indices to a remote repository like S3, GCS, or Azure Blob Storage. The snapshot volume is already configured at `/usr/share/elasticsearch/snapshots`.
-
 ### Index Lifecycle Management (ILM)
 
 Index Lifecycle Management is automatically configured by the `es_bootstrap` service with the following policy:

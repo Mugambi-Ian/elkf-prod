@@ -14,9 +14,32 @@ filebeat.inputs:
 processors:
   - add_host_metadata: {}
   - add_docker_metadata: {}
+  - script:
+      lang: javascript
+      source: >
+        function process(event) {
+          var serviceName = event.Get("service.name");
+          if (serviceName == null || serviceName.length === 0) {
+            event.Put("service.name", "unknown");
+          }
+        }
+      
+output.elasticsearch:
+  hosts: ["https://elasticsearch:9200"]
+  index: "app-logs-%{[service.name]}-%{+YYYY.MM.dd}"
+  username: "elastic"
+  password: "${ELASTIC_PASSWORD}"
+  ssl:
+    verification_mode: "certificate"
+    certificate_authorities: ["/usr/share/filebeat/certs/ca/ca.crt"]
 
-output.logstash:
-  hosts: ["logstash:5044"]
-  # Flush events more frequently for lower latency
-  flush_interval: 1s
-  bulk_max_size: 50
+setup.template:
+  name: "app-logs-template"
+  pattern: "app-logs-*"
+  overwrite: true
+setup.kibana:
+  host: "kibana:5601"
+  protocol: "https"
+  ssl:
+    verification_mode: "certificate"
+    certificate_authorities: ["/usr/share/filebeat/certs/ca/ca.crt"]

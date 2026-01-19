@@ -61,28 +61,7 @@ else
   echo "API key already exists, skipping creation...";
 fi;
 
-# Update index template (idempotent)
-if [ "$TEMPLATE_EXISTS" != "200" ]; then
-  echo "Setting default index template for compression and performance...";
-else
-  echo "Updating index template...";
-fi;
-curl -sk -u elastic:${ELASTIC_PASSWORD} \
-  -X PUT "https://elasticsearch:9200/_index_template/logs-default-template" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"index_patterns\": [\"logs-*\", \"filebeat-*\"],
-    \"priority\": 200,
-    \"template\": {
-      \"settings\": {
-        \"index.codec\": \"best_compression\",
-        \"index.merge.policy.max_merged_segment\": \"2gb\",
-        \"index.refresh_interval\": \"2s\",
-        \"index.number_of_shards\": 1,
-        \"index.number_of_replicas\": 0
-      }
-    }
-  }" >/dev/null 2>&1;
+
 
 # Update ILM policy (idempotent)
 if [ "$ILM_EXISTS" != "200" ]; then

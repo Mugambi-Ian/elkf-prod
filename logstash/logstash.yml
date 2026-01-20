@@ -1,0 +1,16 @@
+api.auth.type: none
+api.ssl.enabled: false
+config.reload.automatic: false
+config.reload.interval: 3s
+dead_letter_queue.enable: false
+http.host: 0.0.0.0
+http.port: 9600
+log.format: json
+log.level: info
+pipeline.batch.delay: 50
+pipeline.batch.size: 125
+pipeline.unsafe_shutdown: false
+pipeline.workers: 2
+queue.max_bytes: 128mb
+queue.type: memory
+xpack.monitoring.enabled: false

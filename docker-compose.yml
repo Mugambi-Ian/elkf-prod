@@ -25,35 +25,21 @@ services:
       node.name: elasticsearch
       discovery.type: single-node
       bootstrap.memory_lock: "false"
-
-      # Security
       xpack.security.enabled: "true"
       xpack.security.authc.api_key.enabled: "true"
       xpack.security.audit.enabled: "true"
-
-      # SSL Transport
       xpack.security.transport.ssl.enabled: "true"
       xpack.security.transport.ssl.key: certs/instance/instance.key
       xpack.security.transport.ssl.certificate: certs/instance/instance.crt
       xpack.security.transport.ssl.certificate_authorities: certs/ca/ca.crt
       xpack.security.transport.ssl.verification_mode: certificate
-
-      # SSL HTTP
       xpack.security.http.ssl.enabled: "true"
       xpack.security.http.ssl.key: certs/instance/instance.key
       xpack.security.http.ssl.certificate: certs/instance/instance.crt
       xpack.security.http.ssl.certificate_authorities: certs/ca/ca.crt
-
-      # Credentials
       ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
-
-      # Snapshot repository path
       path.repo: /usr/share/elasticsearch/snapshots
-
-      # Memory settings - optimized for 2GB droplet
       ES_JAVA_OPTS: "-Xms665m -Xmx665m"
-
-      # Performance tuning
       indices.memory.index_buffer_size: "10%"
       thread_pool.write.queue_size: 500
     deploy:
@@ -119,11 +105,7 @@ services:
       ELASTICSEARCH_PASSWORD: ${KIBANA_SYSTEM_PASSWORD}
       ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES: /usr/share/kibana/config/certs/ca/ca.crt
       ELASTICSEARCH_SSL_VERIFICATIONMODE: certificate
-
-      # Memory optimization
       NODE_OPTIONS: "--max-old-space-size=400"
-
-      # Security
       XPACK_SECURITY_ENCRYPTIONKEY: ${KIBANA_ENCRYPTION_KEY}
       XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: ${KIBANA_ENCRYPTION_KEY}
     ports:
@@ -148,27 +130,30 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  filebeat:
-    image: docker.elastic.co/beats/filebeat:8.12.0
-    container_name: filebeat
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.12.0
+    container_name: logstash
     restart: unless-stopped
     user: root
     depends_on:
       - elasticsearch
       - kibana
     volumes:
-      - ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
-      - certs:/usr/share/filebeat/certs:ro
+      - ./logstash/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:rw
+      - ./logstash/logstash.yml:/usr/share/logstash/config/logstash.yml:rw
+      - certs:/usr/share/logstash/certs:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
+      XPACK_MONITORING_ENABLED: "false"
+      LS_JAVA_OPTS: "-Xms256m -Xmx256m"
     deploy:
       resources:
         limits:
-          memory: 128m
+          memory: 512m
         reservations:
-          memory: 64m
-    environment:
-      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
+          memory: 256m
     logging:
       driver: "json-file"
       options:

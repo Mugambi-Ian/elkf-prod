@@ -51,7 +51,7 @@ services:
       path.repo: /usr/share/elasticsearch/snapshots
 
       # Memory settings - optimized for 2GB droplet
-      ES_JAVA_OPTS: "-Xms256m -Xmx256m"
+      ES_JAVA_OPTS: "-Xms665m -Xmx665m"
 
       # Performance tuning
       indices.memory.index_buffer_size: "10%"
@@ -59,9 +59,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 768m
+          memory: 1331m
         reservations:
-          memory: 512m
+          memory: 900m
     ulimits:
       memlock:
         soft: -1
@@ -159,7 +159,6 @@ services:
     volumes:
       - ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
       - certs:/usr/share/filebeat/certs:ro
-      - app-logs:/usr/local/var/log:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     deploy:
@@ -187,8 +186,6 @@ volumes:
     driver: local
   secrets:
     driver: local
-  app-logs:
-    external: true
 
 networks:
   default:

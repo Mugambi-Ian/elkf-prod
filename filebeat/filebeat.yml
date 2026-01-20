@@ -1,29 +1,52 @@
 filebeat.inputs:
-  - type: filestream
-    id: app-logs
+  - type: container
+    id: docker-container-logs
     paths:
-      - /usr/local/var/log/*.log
+      - '/var/lib/docker/containers/*/*.log'
+
+    # Parse JSON logs automatically
     parsers:
       - ndjson:
           target: ""
           overwrite_keys: true
-    # Optimize for low latency
+
+    # Optimize for low latency (same as before)
     scan_frequency: 1s
-    harvester_buffer_size: 16384
 
 processors:
   - add_host_metadata: {}
-  - add_docker_metadata: {}
+  - add_docker_metadata:
+      host: "unix:///var/run/docker.sock"
+
+  # Extract service name from container labels or name
   - script:
       lang: javascript
       source: >
         function process(event) {
           var serviceName = event.Get("service.name");
+        
+          // If service.name is not set, try to get it from container name
           if (serviceName == null || serviceName.length === 0) {
-            event.Put("service.name", "unknown");
+            var containerName = event.Get("container.name");
+            if (containerName != null && containerName.length > 0) {
+              event.Put("service.name", containerName);
+            } else {
+              event.Put("service.name", "unknown");
+            }
           }
         }
-      
+
+  # Handle timestamp from your logs
+  - timestamp:
+      field: time
+      layouts:
+        - '2006-01-02T15:04:05.999Z'
+        - '2006-01-02T15:04:05Z'
+      target_field: "@timestamp"
+      ignore_missing: true
+      test:
+        - "2026-01-19T13:33:05.179Z"
+
 output.elasticsearch:
   hosts: ["https://elasticsearch:9200"]
   index: "app-logs-%{[service.name]}-%{+YYYY.MM.dd}"
@@ -33,10 +56,18 @@ output.elasticsearch:
     verification_mode: "certificate"
     certificate_authorities: ["/usr/share/filebeat/certs/ca/ca.crt"]
 
+# Index template configuration - REQUIRED when using custom index names
 setup.template:
   name: "app-logs-template"
   pattern: "app-logs-*"
   overwrite: true
+  settings:
+    index:
+      number_of_shards: 1
+      number_of_replicas: 0  # Set to 0 for single-node, 1 for production
+      codec: best_compression  # Save disk space
+      refresh_interval: "5s"   # Balance between search freshness and performance
+
 setup.kibana:
   host: "kibana:5601"
   protocol: "https"

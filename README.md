@@ -1,13 +1,13 @@
 # Logger Stack
 
-A production-ready, secure, and performant logging stack using the Elastic Stack (Elasticsearch, Logstash, Kibana) and Filebeat. This stack is orchestrated with Docker Compose and is designed with security and scalability in mind.
+A production-ready, secure, and performant logging stack using the Elastic Stack (Elasticsearch, Kibana) and Filebeat. This stack is orchestrated with Docker Compose and is designed with security and scalability in mind.
 
 ## Features
 
 -   **Secure by Default**: End-to-end encryption with TLS for all components. Passwords and sensitive configurations are managed via environment variables.
 -   **Performant**: Pre-configured resource limits for each service to ensure stable operation. These should be reviewed and adjusted based on your specific workload and host resources.
--   **Centralized Logging**: Filebeat ships logs from a designated volume, Logstash processes and enriches them, and Elasticsearch provides powerful indexing and search capabilities. Kibana offers a rich UI for visualization and analysis.
--   **Automated Setup**: Bootstrap service automatically configures passwords, API keys, index templates, and ILM policies on first run.
+-   **Centralized Logging**: Filebeat ships logs from a designated volume directly to Elasticsearch, which provides powerful indexing and search capabilities. Kibana offers a rich UI for visualization and analysis.
+-   **Automated Setup**: Bootstrap service automatically configures passwords, index templates, and ILM policies on first run.
 -   **Scalable**: Built on Docker, allowing for straightforward scaling and deployment across different environments.
 
 ## Requirements
@@ -64,7 +64,6 @@ Launch the entire stack. The setup process is automated:
 1. The `cert_gen` service automatically generates TLS certificates for Elastic components
 2. The `es_bootstrap` service waits for Elasticsearch to be healthy, then automatically:
    - Sets the `kibana_system` user password
-   - Creates a Logstash API key for secure log ingestion
    - Configures default index templates with compression and performance optimizations
    - Sets up Index Lifecycle Management (ILM) policies for automatic log rotation and retention
 
@@ -84,9 +83,8 @@ The stack consists of the following services:
 
 - **Elasticsearch**: Stores and indexes logs. Configured with TLS, security enabled, and optimized for low-memory environments (256MB heap).
 - **Kibana**: Web UI for log visualization and analysis. Exposed on port 5601.
-- **Logstash**: Processes logs from Filebeat and sends them to Elasticsearch. Uses API key authentication.
-- **Filebeat**: Collects logs from the `app-logs` volume and Docker containers, ships them to Logstash.
-- **es_bootstrap**: One-time setup service that configures passwords, API keys, index templates, and ILM policies.
+- **Filebeat**: Collects logs from the `app-logs` volume and Docker containers, ships them to Elasticsearch.
+- **es_bootstrap**: One-time setup service that configures passwords, index templates, and ILM policies.
 
 ## Maintenance & Security
 
@@ -95,7 +93,6 @@ The stack consists of the following services:
 The CPU and memory limits in `docker-compose.yml` are set to reasonable defaults optimized for a 2GB droplet:
 - Elasticsearch: 768MB limit, 256MB Java heap
 - Kibana: 640MB limit, 400MB Node.js heap
-- Logstash: 384MB limit, 128MB Java heap
 - Filebeat: 128MB limit
 
 Monitor your resource usage and adjust them according to your host's capacity and the stack's workload.

@@ -151,7 +151,7 @@ services:
       LS_JAVA_OPTS: "-Xms256m -Xmx256m"
     entrypoint: >
       bash -c "
-      microdnf install -y docker &&
+      apt-get update -qq && apt-get install -y -qq docker.io > /dev/null 2>&1 &&
       /usr/local/bin/docker-entrypoint
       "
     deploy:

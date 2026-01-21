@@ -139,8 +139,9 @@ services:
       - elasticsearch
       - kibana
     volumes:
-      - ./logstash/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:rw
-      - ./logstash/logstash.yml:/usr/share/logstash/config/logstash.yml:rw
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - ./logstash/config:/usr/share/logstash/config:rw
+      - logstash-data:/usr/share/logstash/data
       - certs:/usr/share/logstash/certs:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -148,6 +149,11 @@ services:
       ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
       XPACK_MONITORING_ENABLED: "false"
       LS_JAVA_OPTS: "-Xms256m -Xmx256m"
+    entrypoint: >
+      bash -c "
+      microdnf install -y docker &&
+      /usr/local/bin/docker-entrypoint
+      "
     deploy:
       resources:
         limits:
@@ -170,6 +176,8 @@ volumes:
   certs:
     driver: local
   secrets:
+    driver: local
+  logstash-data:
     driver: local
 
 networks:
